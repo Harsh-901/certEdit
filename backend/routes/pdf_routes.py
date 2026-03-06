@@ -1,10 +1,14 @@
 """
-PDF-related API routes: template upload, preview, bulk generation, download.
+PDF-related API routes: template upload, font selection, preview, bulk generation, download.
+Includes SSE stream for real-time progress during bulk generation.
 """
 
 import os
 import base64
-from flask import Blueprint, request, jsonify, send_file
+import json
+import threading
+import queue
+from flask import Blueprint, request, jsonify, send_file, Response, stream_with_context
 from services import session_store, pdf_service, font_service
 
 pdf_bp = Blueprint("pdf", __name__)
@@ -15,16 +19,18 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
-@pdf_bp.route("/api/upload-template", methods=["POST"])
-def upload_template():
+# ─── Upload PDF Template ────────────────────────────────────────────
+
+@pdf_bp.route("/api/upload-pdf", methods=["POST"])
+def upload_pdf():
     """Upload a PDF template and extract text fields."""
     if "file" not in request.files:
-        return jsonify({"stage": "pdf_upload", "status": "error",
+        return jsonify({"status": "error",
                         "message": "No file provided. Please select a PDF file."}), 400
 
     file = request.files["file"]
     if not file.filename.lower().endswith(".pdf"):
-        return jsonify({"stage": "pdf_upload", "status": "error",
+        return jsonify({"status": "error",
                         "message": "Please upload a PDF file."}), 400
 
     # Create or reuse session
@@ -42,29 +48,24 @@ def upload_template():
 
     if "error" in result:
         return jsonify({
-            "stage": "pdf_upload",
             "status": "error",
             "message": result["error"],
             "session_id": session_id,
         }), 400
 
-    # Store in session
-    fields_clean = []
-    for f in result["fields"]:
-        field_copy = {k: v for k, v in f.items() if not k.startswith("_")}
-        fields_clean.append(field_copy)
+    fields = result["fields"]
 
+    # Store in session (field_metadata keyed by field id)
+    field_metadata = {f["id"]: f for f in fields}
     session_store.update_session(session_id,
         template_path=filepath,
         template_page_count=result.get("page_count", 1),
-        detected_fields=fields_clean,
+        detected_fields=fields,
+        field_metadata=field_metadata,
     )
 
-    # Detect fonts
-    detected_fonts = set()
-    for f in result["fields"]:
-        detected_fonts.add(f["font"])
-
+    # ── Font detection ──
+    detected_fonts = set(f["font"] for f in fields)
     font_results = []
     fonts_config = {}
     all_available = True
@@ -80,7 +81,6 @@ def upload_template():
                 "available": True,
                 "matched_to": matched,
                 "is_alias": check["is_alias"],
-                "suggestions": None,
             })
         else:
             all_available = False
@@ -96,22 +96,32 @@ def upload_template():
     session_store.update_session(session_id, fonts_config=fonts_config)
 
     return jsonify({
-        "stage": "pdf_upload",
         "status": "success",
-        "message": f"Found {len(fields_clean)} text fields across {result.get('page_count', 1)} page(s).",
+        "message": f"Found {len(fields)} text fields.",
         "session_id": session_id,
-        "fields": fields_clean,
-        "page_count": result.get("page_count", 1),
+        "fields": fields,
         "page_width": result.get("page_width", 0),
         "page_height": result.get("page_height", 0),
-        "fonts": {
-            "status": "ok" if all_available else "partial",
-            "message": "All fonts loaded. Ready to map your data." if all_available
-                       else f"{sum(1 for f in font_results if not f['available'])} font(s) not found. Please select replacements.",
+        "font_status": {
+            "all_available": all_available,
             "results": font_results,
         },
     })
 
+
+# ─── Serve Template PDF to Frontend ──────────────────────────────────
+
+@pdf_bp.route("/api/template-pdf/<session_id>", methods=["GET"])
+def serve_template_pdf(session_id):
+    """Serve the uploaded template PDF so PDF.js can render it."""
+    session = session_store.get_session(session_id)
+    if not session or not session.get("template_path"):
+        return jsonify({"status": "error", "message": "No template found."}), 404
+
+    return send_file(session["template_path"], mimetype="application/pdf")
+
+
+# ─── Font Selection ──────────────────────────────────────────────────
 
 @pdf_bp.route("/api/select-font", methods=["POST"])
 def select_font():
@@ -119,16 +129,17 @@ def select_font():
     session_id = request.headers.get("X-Session-ID")
     session = session_store.get_session(session_id)
     if not session:
-        return jsonify({"status": "error", "message": "Session not found. Please re-upload your template."}), 400
+        return jsonify({"status": "error",
+                        "message": "Session not found. Please re-upload your template."}), 400
 
     data = request.get_json()
     original_font = data.get("original_font")
     replacement_font = data.get("replacement_font")
 
     if not original_font or not replacement_font:
-        return jsonify({"status": "error", "message": "Please specify both the original and replacement font."}), 400
+        return jsonify({"status": "error",
+                        "message": "Please specify both the original and replacement font."}), 400
 
-    # Download the replacement font
     font_path = font_service.get_font_path(replacement_font)
 
     fonts_config = session["fonts_config"]
@@ -136,13 +147,14 @@ def select_font():
     session_store.update_session(session_id, fonts_config=fonts_config)
 
     return jsonify({
-        "stage": "font_selection",
         "status": "success",
-        "message": f"'{replacement_font}' selected as replacement for '{original_font}'.",
+        "message": f"'{replacement_font}' selected for '{original_font}'.",
         "font": original_font,
         "replacement": replacement_font,
     })
 
+
+# ─── Preview Certificate ─────────────────────────────────────────────
 
 @pdf_bp.route("/api/preview", methods=["POST"])
 def preview_certificate():
@@ -156,45 +168,96 @@ def preview_certificate():
     mappings = data.get("mappings", session.get("mappings", {}))
 
     if not mappings:
-        return jsonify({"status": "error", "message": "No field mappings defined. Please map at least one column."}), 400
+        return jsonify({"status": "error",
+                        "message": "No field mappings defined. Map at least one column."}), 400
 
     rows = session.get("data_rows", [])
     if not rows:
-        return jsonify({"status": "error", "message": "No data loaded. Please upload a data file first."}), 400
+        return jsonify({"status": "error",
+                        "message": "No data loaded. Upload a data file first."}), 400
 
     # Store mappings
     session_store.update_session(session_id, mappings=mappings)
 
-    # Generate preview with first row
+    # Build field_data from first row
+    field_data = {}
+    for field_id, column_name in mappings.items():
+        field_data[field_id] = str(rows[0].get(column_name, "")).strip()
+
+    field_metadata = session.get("field_metadata", {})
+
     pdf_bytes = pdf_service.generate_certificate(
         session["template_path"],
-        mappings,
-        rows[0],
+        field_data,
+        field_metadata,
         session.get("fonts_config", {}),
     )
 
-    if pdf_bytes is None:
+    if pdf_bytes is None or pdf_bytes is False:
         return jsonify({"status": "error", "message": "Failed to generate preview."}), 500
-
-    # Also get the original template as base64 for comparison
-    with open(session["template_path"], "rb") as f:
-        template_b64 = base64.b64encode(f.read()).decode("utf-8")
 
     preview_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
 
     return jsonify({
-        "stage": "preview",
         "status": "success",
-        "message": "Preview ready.",
-        "preview_pdf": preview_b64,
-        "template_pdf": template_b64,
-        "preview_data": rows[0],
+        "message": "Preview generated.",
+        "pdf_base64": preview_b64,
+        "preview_row": rows[0],
     })
 
 
+# ─── Bulk Generate (Synchronous) ─────────────────────────────────────
+
 @pdf_bp.route("/api/generate", methods=["POST"])
 def generate_certificates():
-    """Bulk generate all certificates."""
+    """Bulk generate all certificates (synchronous, for small batches)."""
+    session_id = request.headers.get("X-Session-ID")
+    session = session_store.get_session(session_id)
+    if not session:
+        return jsonify({"status": "error", "message": "Session not found."}), 400
+
+    data = request.get_json() or {}
+    mappings = data.get("mappings", session.get("mappings", {}))
+    name_column = data.get("name_column", session.get("name_column"))
+    export_type = data.get("export_type", "both")
+
+    if not mappings:
+        return jsonify({"status": "error", "message": "No field mappings defined."}), 400
+
+    rows = session.get("data_rows", [])
+    if not rows:
+        return jsonify({"status": "error", "message": "No data loaded."}), 400
+
+    output_dir = os.path.join(OUTPUT_DIR, session_id)
+    field_metadata = session.get("field_metadata", {})
+
+    result = pdf_service.generate_bulk(
+        session["template_path"],
+        mappings,
+        rows,
+        field_metadata,
+        session.get("fonts_config", {}),
+        name_column=name_column,
+        output_dir=output_dir,
+    )
+
+    return jsonify({
+        "status": "success",
+        "message": f"{result['count']} certificates ready to download.",
+        "count": result["count"],
+        "total": result["total"],
+        "warnings": result["warnings"],
+        "failures": result.get("failures", []),
+        "download_zip": f"/api/download/{session_id}/zip",
+        "download_merged": f"/api/download/{session_id}/merged",
+    })
+
+
+# ─── Bulk Generate with SSE Progress ─────────────────────────────────
+
+@pdf_bp.route("/api/generate-stream", methods=["POST"])
+def generate_certificates_stream():
+    """Bulk generate all certificates with SSE progress updates."""
     session_id = request.headers.get("X-Session-ID")
     session = session_store.get_session(session_id)
     if not session:
@@ -211,42 +274,81 @@ def generate_certificates():
     if not rows:
         return jsonify({"status": "error", "message": "No data loaded."}), 400
 
-    # Session-specific output dir
     output_dir = os.path.join(OUTPUT_DIR, session_id)
+    field_metadata = session.get("field_metadata", {})
+    fonts_config = session.get("fonts_config", {})
+    template_path = session["template_path"]
 
-    result = pdf_service.generate_bulk(
-        session["template_path"],
-        mappings,
-        rows,
-        session.get("fonts_config", {}),
-        name_column=name_column,
-        output_dir=output_dir,
+    # Use a queue for thread-safe SSE communication
+    progress_queue = queue.Queue()
+
+    def progress_callback(current, total, current_name):
+        progress_queue.put({
+            "type": "progress",
+            "progress": current,
+            "total": total,
+            "current_name": current_name,
+        })
+
+    def run_generation():
+        try:
+            result = pdf_service.generate_bulk(
+                template_path, mappings, rows, field_metadata, fonts_config,
+                name_column=name_column, output_dir=output_dir,
+                progress_callback=progress_callback,
+            )
+            progress_queue.put({
+                "type": "complete",
+                "count": result["count"],
+                "total": result["total"],
+                "warnings": result["warnings"],
+                "failures": result.get("failures", []),
+                "download_zip": f"/api/download/{session_id}/zip",
+                "download_merged": f"/api/download/{session_id}/merged",
+            })
+        except Exception as e:
+            progress_queue.put({"type": "error", "message": str(e)})
+
+    thread = threading.Thread(target=run_generation, daemon=True)
+    thread.start()
+
+    def event_stream():
+        while True:
+            try:
+                msg = progress_queue.get(timeout=120)
+                yield f"data: {json.dumps(msg)}\n\n"
+                if msg.get("type") in ("complete", "error"):
+                    break
+            except queue.Empty:
+                # Send keepalive
+                yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
+
+    return Response(
+        stream_with_context(event_stream()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
     )
 
-    return jsonify({
-        "stage": "generation",
-        "status": "success",
-        "message": f"Generated {result['count']} of {result['total']} certificates.",
-        "count": result["count"],
-        "total": result["total"],
-        "warnings": result["warnings"],
-        "download_zip": f"/api/download/{session_id}/zip",
-        "download_merged": f"/api/download/{session_id}/merged",
-    })
 
+# ─── Download Generated Files ────────────────────────────────────────
 
 @pdf_bp.route("/api/download/<session_id>/<format_type>", methods=["GET"])
 def download_certificates(session_id, format_type):
-    """Download generated certificates."""
+    """Download generated certificates as ZIP or merged PDF."""
     output_dir = os.path.join(OUTPUT_DIR, session_id)
 
     if format_type == "zip":
         zip_path = os.path.join(output_dir, "certificates.zip")
         if os.path.exists(zip_path):
-            return send_file(zip_path, as_attachment=True, download_name="certificates.zip")
+            return send_file(zip_path, as_attachment=True,
+                             download_name="certificates.zip")
     elif format_type == "merged":
         merged_path = os.path.join(output_dir, "certificates_merged.pdf")
         if os.path.exists(merged_path):
-            return send_file(merged_path, as_attachment=True, download_name="certificates_merged.pdf")
+            return send_file(merged_path, as_attachment=True,
+                             download_name="certificates_merged.pdf")
 
     return jsonify({"status": "error", "message": "File not found."}), 404

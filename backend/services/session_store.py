@@ -19,6 +19,7 @@ def create_session():
         "template_path": None,
         "template_page_count": 0,
         "detected_fields": [],
+        "field_metadata": {},     # {field_id: field_dict} for quick lookup
         "fonts_config": {},       # {original_font: replacement_font_or_None}
         "data_file_path": None,
         "data_headers": [],

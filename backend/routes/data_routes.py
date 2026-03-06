@@ -1,5 +1,5 @@
 """
-Data file upload and mapping validation routes.
+Data file upload, parsing, and mapping validation routes.
 """
 
 import os
@@ -18,7 +18,8 @@ def upload_data():
     session_id = request.headers.get("X-Session-ID")
     session = session_store.get_session(session_id)
     if not session:
-        return jsonify({"status": "error", "message": "Session not found. Please upload a template first."}), 400
+        return jsonify({"status": "error",
+                        "message": "Session not found. Please upload a template first."}), 400
 
     if "file" not in request.files:
         return jsonify({"status": "error", "message": "No file provided."}), 400
@@ -28,7 +29,7 @@ def upload_data():
 
     if ext not in [".xlsx", ".csv", ".json"]:
         return jsonify({"status": "error",
-                        "message": "Unsupported file format. Please upload an XLSX, CSV, or JSON file."}), 400
+                        "message": "Unsupported format. Upload XLSX, CSV, or JSON."}), 400
 
     # Save file
     filename = f"{session_id}_data{ext}"
@@ -39,11 +40,7 @@ def upload_data():
     result = data_service.parse_data_file(filepath)
 
     if "error" in result:
-        return jsonify({
-            "stage": "data_upload",
-            "status": "error",
-            "message": result["error"],
-        }), 400
+        return jsonify({"status": "error", "message": result["error"]}), 400
 
     # Store in session
     session_store.update_session(session_id,
@@ -54,18 +51,16 @@ def upload_data():
         data_skipped_rows=result.get("skipped_rows", 0),
     )
 
-    # Build skip message
+    # Build response per spec: columns, total_rows, preview
     skip_msg = ""
     if result.get("skipped_rows", 0) > 0:
         skip_msg = f" ({result['skipped_rows']} empty row(s) skipped.)"
 
     return jsonify({
-        "stage": "data_upload",
         "status": "success",
-        "message": f"Loaded {result['row_count']} records from your data file.{skip_msg}",
-        "headers": result["headers"],
-        "row_count": result["row_count"],
-        "skipped_rows": result.get("skipped_rows", 0),
+        "message": f"Loaded {result['row_count']} records.{skip_msg}",
+        "columns": result["headers"],
+        "total_rows": result["row_count"],
         "preview": result["preview"],
     })
 
@@ -83,30 +78,41 @@ def validate_mapping():
     name_column = data.get("name_column")
 
     if not mappings:
-        return jsonify({
-            "stage": "mapping_validation",
-            "status": "error",
-            "message": "At least one mapping must be defined.",
-        }), 400
+        return jsonify({"status": "error",
+                        "message": "At least one mapping must exist."}), 400
 
-    warnings = []
+    # Validate field IDs exist
+    field_metadata = session.get("field_metadata", {})
+    for field_id in mappings.keys():
+        if field_id not in field_metadata:
+            return jsonify({"status": "error",
+                            "message": f"Unknown field '{field_id}'."}), 400
+
+    # Validate column names exist
     headers = session.get("data_headers", [])
+    for column_name in mappings.values():
+        if column_name not in headers:
+            return jsonify({"status": "error",
+                            "message": f"Unknown column '{column_name}'."}), 400
 
-    # Check for unmapped name-like columns
-    name_hints = ["name", "full name", "fullname", "recipient", "student", "participant", "awardee"]
+    # Soft warning for unmapped name-like columns
+    warnings = []
+    name_hints = ["name", "full name", "fullname", "recipient", "student",
+                  "participant", "awardee"]
     mapped_columns = set(mappings.values())
 
     for header in headers:
         if header.lower().strip() in name_hints and header not in mapped_columns:
-            warnings.append(f"It looks like you haven't mapped the '{header}' column. Are you sure?")
+            warnings.append(
+                f"The '{header}' column is not mapped to any field. Continue anyway?"
+            )
 
-    # Store mappings and name column
+    # Store
     session_store.update_session(session_id, mappings=mappings, name_column=name_column)
 
     return jsonify({
-        "stage": "mapping_validation",
         "status": "warning" if warnings else "success",
-        "message": "Mappings validated." if not warnings else "Mappings saved with warnings.",
+        "message": "Mappings saved." if not warnings else "Mappings saved with warnings.",
         "warnings": warnings,
         "mapping_count": len(mappings),
     })
@@ -116,6 +122,4 @@ def validate_mapping():
 def get_font_library():
     """Return the full font library for browsing."""
     from services import font_service
-    return jsonify({
-        "fonts": font_service.get_all_library_fonts(),
-    })
+    return jsonify({"fonts": font_service.get_all_library_fonts()})
