@@ -54,7 +54,7 @@ The app features a dark-mode UI with glassmorphism cards, gradient accents, and 
 ### Prerequisites
 
 - **Python 3.9+** (tested with 3.12)
-- No Node.js required — frontend is served directly from Flask
+- **Node.js 18+** (for the React frontend)
 
 ### Installation
 
@@ -65,16 +65,31 @@ cd H:\Projects\certEdit
 # Install Python dependencies
 cd backend
 pip install -r requirements.txt
+
+# Install Node dependencies
+cd ../frontend
+npm install
 ```
 
 ### Run
 
+You need two terminal windows to run both the backend and frontend in development mode.
+
+**Terminal 1 — Backend:**
 ```bash
 cd backend
 python app.py
 ```
+*Backend runs on http://localhost:5000*
 
-Open **http://localhost:5000** in your browser.
+**Terminal 2 — Frontend:**
+```bash
+cd frontend
+npm run dev
+```
+*Frontend runs on http://localhost:3000*
+
+Open **http://localhost:3000** in your browser.
 
 ---
 
@@ -103,18 +118,16 @@ certEdit/
 │   └── fonts/                      # Cached font files (auto-created)
 │
 └── frontend/
-    ├── index.html                  # App shell with 6-step wizard layout
-    ├── index.css                   # Full design system (dark mode, glassmorphism)
+    ├── package.json                # Node dependencies & scripts
+    ├── vite.config.js              # Vite configuration (proxy to 5000)
+    ├── index.html                  # App entry point
     └── src/
-        ├── main.js                 # App controller, step navigation, toasts
+        ├── main.jsx                # React root
+        ├── App.jsx                 # Main application component
+        ├── index.css               # Full design system (dark mode, glassmorphism)
         ├── api.js                  # Backend API wrapper with session management
-        └── steps/
-            ├── step1-upload.js     # PDF drag-and-drop upload
-            ├── step2-fonts.js      # Font detection & replacement UI
-            ├── step3-data.js       # Data file upload & preview table
-            ├── step4-mapping.js    # Two-panel column mapping
-            ├── step5-preview.js    # Before/after certificate preview
-            └── step6-generate.js   # Bulk generation + download
+        ├── components/             # Reusable UI components
+        └── steps/                  # Wizard step components (upload, fonts, data, etc.)
 ```
 
 ---
@@ -258,7 +271,7 @@ Tests all 6 pipeline stages: template upload → font detection → data parsing
 | PDF Engine | PyMuPDF (fitz) | Best-in-class text extraction with full metadata (font, size, bbox, color, flags) + redact/reinsert for text replacement |
 | Data Parsing | openpyxl, csv, json | Native Python libraries — no heavy dependencies |
 | Font Source | Google Fonts | Free, high-quality, on-demand download + caching |
-| Frontend | Vanilla HTML/CSS/JS | Zero build step, served directly by Flask |
+| Frontend | React 19 + Vite | Component-based, modern tooling, fast HMR |
 | Styling | CSS Custom Properties | Dark mode, glassmorphism, gradient accents, micro-animations |
 
 ---
