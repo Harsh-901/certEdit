@@ -9,6 +9,13 @@
         "preview": "vite preview"
     },
     "devDependencies": {
-        "vite": "^5.4.21"
+        "@vitejs/plugin-react": "^5.1.4",
+        "vite": "^7.3.1"
+    },
+    "dependencies": {
+        "@rollup/rollup-win32-x64-msvc": "^4.59.0",
+        "pdfjs-dist": "^4.9.155",
+        "react": "^19.2.4",
+        "react-dom": "^19.2.4"
     }
 }

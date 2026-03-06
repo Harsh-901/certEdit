@@ -1,79 +1,22 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CertEdit — Certificate Generator</title>
-  <meta name="description" content="Generate personalized certificates from PDF templates. Upload, map data, preview, and export hundreds of certificates in seconds." />
+  <meta name="description"
+    content="Generate personalized certificates from PDF templates. Upload, map data, preview, and export hundreds of certificates in seconds." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/index.css" />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@600;700&display=swap"
+    rel="stylesheet" />
 </head>
+
 <body>
-  <div id="app">
-    <!-- Header -->
-    <header class="header">
-      <div class="logo">
-        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-          <rect width="32" height="32" rx="8" fill="url(#logo-grad)" />
-          <path d="M8 10h16M8 16h12M8 22h14" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
-          <circle cx="24" cy="22" r="4" fill="#fff" opacity="0.9"/>
-          <path d="M23 22l1 1 2-2" stroke="url(#logo-grad)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          <defs>
-            <linearGradient id="logo-grad" x1="0" y1="0" x2="32" y2="32">
-              <stop stop-color="#6C63FF"/>
-              <stop offset="1" stop-color="#E040FB"/>
-            </linearGradient>
-          </defs>
-        </svg>
-        <span class="logo-text">CertEdit</span>
-      </div>
-      <p class="header-tagline">Certificate Generation Pipeline</p>
-    </header>
-
-    <!-- Step Indicator -->
-    <nav class="step-indicator" id="stepIndicator">
-      <div class="step active" data-step="1">
-        <div class="step-circle">1</div>
-        <span class="step-label">Upload PDF</span>
-      </div>
-      <div class="step-line"></div>
-      <div class="step" data-step="2">
-        <div class="step-circle">2</div>
-        <span class="step-label">Fonts</span>
-      </div>
-      <div class="step-line"></div>
-      <div class="step" data-step="3">
-        <div class="step-circle">3</div>
-        <span class="step-label">Data</span>
-      </div>
-      <div class="step-line"></div>
-      <div class="step" data-step="4">
-        <div class="step-circle">4</div>
-        <span class="step-label">Mapping</span>
-      </div>
-      <div class="step-line"></div>
-      <div class="step" data-step="5">
-        <div class="step-circle">5</div>
-        <span class="step-label">Preview</span>
-      </div>
-      <div class="step-line"></div>
-      <div class="step" data-step="6">
-        <div class="step-circle">6</div>
-        <span class="step-label">Generate</span>
-      </div>
-    </nav>
-
-    <!-- Step Content -->
-    <main class="step-content" id="stepContent">
-      <!-- Step panels will be injected here by JS -->
-    </main>
-
-    <!-- Toast container -->
-    <div class="toast-container" id="toastContainer"></div>
-  </div>
-
-  <script type="module" src="/src/main.js"></script>
+  <div id="root"></div>
+  <script type="module" src="/src/main.jsx"></script>
 </body>
+
 </html>
