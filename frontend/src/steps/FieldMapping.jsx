@@ -39,7 +39,7 @@ export default function FieldMapping({
                 const page = await pdf.getPage(1);
 
                 // Use the page's default rotation so it renders correctly
-                const viewport = page.getViewport({ scale: RENDER_SCALE });
+                const viewport = page.getViewport({ scale: RENDER_SCALE, rotation: page.rotate });
 
                 const canvas = canvasRef.current;
                 if (!canvas || cancelled) return;
@@ -51,34 +51,32 @@ export default function FieldMapping({
 
                 setCanvasDims({ w: viewport.width, h: viewport.height });
 
-                // Extract text content for clickable text layer
-                const content = await page.getTextContent();
-                const items = [];
+                // Build clickable overlay items directly from backend fields prop
+                // This ensures item IDs match backend field IDs (field_0, field_1, etc.)
+                const items = fields.map(f => {
+                    // PyMuPDF bbox is [x0, y0, x1, y1] in PDF points (bottom-left origin)
+                    // PDF.js viewport.convertToViewportPoint handles the coordinate conversion
+                    const [x0, y0, x1, y1] = f.bbox;
 
-                content.items.forEach((item, idx) => {
-                    if (!item.str || !item.str.trim()) return;
+                    // PyMuPDF uses top-left origin. PDF.js convertToViewportPoint 
+                    // expects standard PDF coordinates (bottom-left origin).
+                    // We must flip the y-axis relative to pageHeight.
+                    const pt0 = viewport.convertToViewportPoint(x0, pageHeight - y0);
+                    const pt1 = viewport.convertToViewportPoint(x1, pageHeight - y1);
 
-                    const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+                    const left = Math.min(pt0[0], pt1[0]);
+                    const top = Math.min(pt0[1], pt1[1]);
+                    const width = Math.abs(pt1[0] - pt0[0]);
+                    const height = Math.abs(pt1[1] - pt0[1]);
 
-                    // tx is [scaleX, skewY, skewX, scaleY, translateX, translateY]
-                    const fontSize = Math.sqrt(tx[0] * tx[0] + tx[1] * tx[1]);
-                    const x = tx[4];
-                    const y = tx[5];
-
-                    // Text height ≈ fontSize, width from item.width scaled
-                    const width = item.width * RENDER_SCALE;
-                    const height = fontSize;
-
-                    items.push({
-                        id: `text_${idx}`,
-                        text: item.str,
-                        x: x,
-                        y: y - height,   // PDF text baseline → top-left
-                        width: Math.max(width, 20),
-                        height: Math.max(height, 10),
-                        fontName: item.fontName || '',
-                        fontSize: fontSize / RENDER_SCALE,
-                    });
+                    return {
+                        id: f.id,          // field_0, field_1 etc — matches backend directly
+                        text: f.text,
+                        x: left,
+                        y: top,
+                        width: Math.max(width, 30),
+                        height: Math.max(height, 14),
+                    };
                 });
 
                 setTextItems(items);
@@ -95,7 +93,44 @@ export default function FieldMapping({
 
         loadPdf();
         return () => { cancelled = true; };
-    }, [addToast]);
+    }, [fields, addToast]);
+
+    // Auto-map fields
+    const hasAutoMapped = useRef(false);
+    useEffect(() => {
+        if (!fields || !columns || hasAutoMapped.current || Object.keys(mappings).length > 0) return;
+
+        const initialMappings = {};
+        let mappedCount = 0;
+
+        fields.forEach(f => {
+            const text = f.text.trim();
+            
+            let cleanText = text.toLowerCase();
+            const match = text.match(/\[(.*?)\]|\{(.*?)\}/);
+            
+            if (match) {
+                // If there's a bracketed portion, use its content for auto-mapping
+                cleanText = (match[1] || match[2]).trim().toLowerCase();
+            } else {
+                // Otherwise fallback to removing full-string brackets
+                cleanText = text.replace(/^\[+/, '').replace(/\]+$/, '')
+                                .replace(/^\{+/, '').replace(/\}+$/, '').trim().toLowerCase();
+            }
+
+            const matchedCol = columns.find(c => c.toLowerCase() === cleanText);
+            if (matchedCol) {
+                initialMappings[f.id] = matchedCol;
+                mappedCount++;
+            }
+        });
+
+        if (mappedCount > 0) {
+            setMappings(initialMappings);
+            addToast(`Auto-mapped ${mappedCount} fields!`, 'success');
+        }
+        hasAutoMapped.current = true;
+    }, [fields, columns, mappings, setMappings, addToast]);
 
     // Handle text click → show dropdown
     const handleTextClick = useCallback((item, e) => {
@@ -152,44 +187,8 @@ export default function FieldMapping({
             return;
         }
 
-        // Build mappings keyed by field_id for the backend
-        // Match selected text items to the closest backend-detected field
-        const backendMappings = {};
-        for (const [itemId, column] of Object.entries(mappings)) {
-            const item = textItems.find(t => t.id === itemId);
-            if (!item) continue;
-
-            // Find the backend field whose text matches (or is closest)
-            const matchedField = fields.find(f =>
-                f.text.trim() === item.text.trim()
-            ) || fields.find(f =>
-                item.text.trim().includes(f.text.trim()) || f.text.trim().includes(item.text.trim())
-            );
-
-            if (matchedField) {
-                backendMappings[matchedField.id] = column;
-            } else {
-                // Fallback: match by position proximity
-                let bestField = null;
-                let bestDist = Infinity;
-                for (const f of fields) {
-                    const fx = f.bbox[0];
-                    const fy = f.bbox[1];
-                    const ix = item.x / RENDER_SCALE;
-                    const iy = item.y / RENDER_SCALE;
-                    const dist = Math.sqrt((fx - ix) ** 2 + (fy - iy) ** 2);
-                    if (dist < bestDist) {
-                        bestDist = dist;
-                        bestField = f;
-                    }
-                }
-                if (bestField && bestDist < 50) {
-                    backendMappings[bestField.id] = column;
-                } else {
-                    addToast(`Could not match "${item.text}" to a backend field.`, 'warning');
-                }
-            }
-        }
+        // No translation needed — overlay items use field_id directly
+        const backendMappings = { ...mappings };
 
         if (Object.keys(backendMappings).length === 0) {
             addToast('No valid field mappings found. Try selecting different text.', 'error');

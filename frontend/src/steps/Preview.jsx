@@ -28,7 +28,7 @@ export default function Preview({ mappings, onComplete, onBack, addToast }) {
 
             const pdf = await loadingTask.promise;
             const page = await pdf.getPage(1);
-            const viewport = page.getViewport({ scale: PREVIEW_SCALE });
+            const viewport = page.getViewport({ scale: PREVIEW_SCALE, rotation: page.rotate });
 
             const canvas = canvasRef.current;
             if (!canvas) return;

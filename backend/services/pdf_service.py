@@ -40,52 +40,6 @@ def _color_int_to_hex(color_int):
     return "#{:06x}".format(color_int)
 
 
-def _sample_background_color(page, bbox):
-    """
-    Sample the background color around a text bounding box.
-    Takes a small pixmap of the area and finds the dominant color.
-    Returns (r, g, b) normalized 0-1. Defaults to white.
-    """
-    try:
-        # Expand bbox slightly to sample surrounding area
-        sample_rect = fitz.Rect(bbox)
-        sample_rect.x0 = max(0, sample_rect.x0 - 5)
-        sample_rect.y0 = max(0, sample_rect.y0 - 5)
-        sample_rect.x1 = min(page.rect.width, sample_rect.x1 + 5)
-        sample_rect.y1 = min(page.rect.height, sample_rect.y1 + 5)
-
-        # Render a small pixmap of the region
-        clip = fitz.Rect(sample_rect)
-        pix = page.get_pixmap(clip=clip, dpi=72)
-
-        if pix.n < 3:
-            return (1, 1, 1)
-
-        # Sample corners and edges (away from the text center)
-        samples = []
-        w, h = pix.width, pix.height
-        if w < 2 or h < 2:
-            return (1, 1, 1)
-
-        # Sample corner pixels
-        for x, y in [(0, 0), (w-1, 0), (0, h-1), (w-1, h-1),
-                      (0, h//2), (w-1, h//2)]:
-            pixel = pix.pixel(x, y)
-            samples.append(pixel[:3])
-
-        if not samples:
-            return (1, 1, 1)
-
-        # Average the samples
-        avg_r = sum(s[0] for s in samples) / len(samples)
-        avg_g = sum(s[1] for s in samples) / len(samples)
-        avg_b = sum(s[2] for s in samples) / len(samples)
-
-        return (avg_r / 255.0, avg_g / 255.0, avg_b / 255.0)
-
-    except Exception:
-        return (1, 1, 1)  # Default to white on any failure
-
 
 def extract_text_fields(pdf_path):
     """
@@ -241,6 +195,13 @@ def generate_certificate(template_path, field_data, field_metadata, font_map, ou
         color_rgb = tuple(meta.get("color_rgb", [0, 0, 0]))
         alignment = meta.get("align", 1)
 
+        original_text = meta.get("text", "")
+        # If original text contains brackets, replace only the first bracketed portion
+        if re.search(r'\[.*?\]|\{.*?\}', original_text):
+            final_value = re.sub(r'\[.*?\]|\{.*?\}', str(new_value), original_text, count=1)
+        else:
+            final_value = str(new_value)
+
         # Resolve font
         font_path = None
         used_fontname = "helv"
@@ -258,32 +219,45 @@ def generate_certificate(template_path, field_data, field_metadata, font_map, ou
                     used_fontname = "helv"
                     font_path = None
 
-        # Sample background color BEFORE any redaction modifies the page
-        bg_color = _sample_background_color(page, bbox)
-
         redraw_tasks.append({
             "bbox": bbox,
-            "new_value": new_value,
+            "new_value": final_value,
             "fontname": used_fontname,
             "font_path": font_path,
             "font_size": font_size,
             "color_rgb": color_rgb,
             "alignment": alignment,
-            "bg_color": bg_color,
         })
 
     # ── Phase 2: Add ALL redaction annotations ──
     for task in redraw_tasks:
-        page.add_redact_annot(task["bbox"], fill=task["bg_color"])
+        page.add_redact_annot(task["bbox"])
 
     # ── Phase 3: Apply ALL redactions in ONE pass ──
     if redraw_tasks:
-        page.apply_redactions()
+        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+
+    page_width = page.rect.width
 
     # ── Phase 4: Redraw ALL replacement text ──
     for task in redraw_tasks:
         text_rect = fitz.Rect(task["bbox"])
-        text_rect.y1 += 2
+        
+        # Expand rect vertically to ensure text is never clipped
+        text_rect.y0 -= task["font_size"]
+        text_rect.y1 += task["font_size"] * 2
+
+        # Expand rect horizontally based on alignment to fit long text
+        align = task["alignment"]
+        if align == 0:  # Left aligned
+            text_rect.x1 = page_width - 20
+        elif align == 2:  # Right aligned
+            text_rect.x0 = 20
+        else:  # Center aligned
+            center_x = (text_rect.x0 + text_rect.x1) / 2
+            half_width = max(min(center_x - 20, page_width - 20 - center_x), 0)
+            text_rect.x0 = center_x - half_width
+            text_rect.x1 = center_x + half_width
 
         fp = task["font_path"]
         page.insert_textbox(
@@ -293,7 +267,7 @@ def generate_certificate(template_path, field_data, field_metadata, font_map, ou
             fontfile=fp if fp and os.path.exists(fp) else None,
             fontsize=task["font_size"],
             color=task["color_rgb"],
-            align=task["alignment"],
+            align=align,
         )
 
     if output_path:

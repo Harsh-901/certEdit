@@ -7,8 +7,9 @@ export default function UploadPdf({ onComplete, addToast }) {
     const [file, setFile] = useState(null);
 
     const handleFile = async (f) => {
-        if (!f.name.toLowerCase().endsWith('.pdf')) {
-            addToast('Please upload a PDF file.', 'error');
+        const fileName = f.name.toLowerCase();
+        if (!fileName.endsWith('.pdf') && !fileName.endsWith('.svg')) {
+            addToast('Please upload a PDF or SVG file.', 'error');
             return;
         }
 
@@ -40,14 +41,14 @@ export default function UploadPdf({ onComplete, addToast }) {
 
             <h2 className="card-title">Upload Certificate Template</h2>
             <p className="card-subtitle">
-                Upload a vector PDF with real text layers. The system will detect every text field
+                Upload a vector PDF or SVG with real text layers. The system will detect every text field
                 for you to map to your data.
             </p>
 
             <FileUpload
-                accept=".pdf"
-                label="Drop your certificate PDF here"
-                hint="PDF with text layers · Vector format recommended"
+                accept=".pdf,.svg"
+                label="Drop your certificate PDF/SVG here"
+                hint="PDF or SVG with text layers · Vector format recommended"
                 icon="📄"
                 onFile={handleFile}
                 hasFile={!!file}

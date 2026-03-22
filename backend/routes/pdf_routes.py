@@ -23,15 +23,16 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 @pdf_bp.route("/api/upload-pdf", methods=["POST"])
 def upload_pdf():
-    """Upload a PDF template and extract text fields."""
+    """Upload a PDF or SVG template and extract text fields."""
     if "file" not in request.files:
         return jsonify({"status": "error",
-                        "message": "No file provided. Please select a PDF file."}), 400
+                        "message": "No file provided. Please select a PDF or SVG file."}), 400
 
     file = request.files["file"]
-    if not file.filename.lower().endswith(".pdf"):
+    filename_lower = file.filename.lower()
+    if not (filename_lower.endswith(".pdf") or filename_lower.endswith(".svg")):
         return jsonify({"status": "error",
-                        "message": "Please upload a PDF file."}), 400
+                        "message": "Please upload a PDF or SVG file."}), 400
 
     # Create or reuse session
     session_id = request.headers.get("X-Session-ID")
@@ -41,7 +42,26 @@ def upload_pdf():
     # Save file
     filename = f"{session_id}_template.pdf"
     filepath = os.path.join(UPLOAD_DIR, filename)
-    file.save(filepath)
+    
+    if filename_lower.endswith(".svg"):
+        # Save as SVG temporarily, then convert to PDF using fitz
+        svg_filepath = os.path.join(UPLOAD_DIR, f"{session_id}_temp.svg")
+        file.save(svg_filepath)
+        try:
+            import fitz
+            doc = fitz.open(svg_filepath)
+            pdfbytes = doc.convert_to_pdf()
+            with open(filepath, "wb") as f:
+                f.write(pdfbytes)
+            doc.close()
+        except Exception as e:
+            return jsonify({"status": "error",
+                            "message": f"Failed to process SVG file: {str(e)}"}), 400
+        finally:
+            if os.path.exists(svg_filepath):
+                os.remove(svg_filepath)
+    else:
+        file.save(filepath)
 
     # Extract text fields
     result = pdf_service.extract_text_fields(filepath)
