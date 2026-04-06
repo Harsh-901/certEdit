@@ -243,9 +243,9 @@ def generate_certificate(template_path, field_data, field_metadata, font_map, ou
     for task in redraw_tasks:
         text_rect = fitz.Rect(task["bbox"])
         
-        # Expand rect vertically to ensure text is never clipped
-        text_rect.y0 -= task["font_size"]
-        text_rect.y1 += task["font_size"] * 2
+        # Expand rect vertically down to prevent height clipping of descenders
+        # Keep y0 the same to prevent text from shifting UP!
+        text_rect.y1 += task["font_size"]
 
         # Expand rect horizontally based on alignment to fit long text
         align = task["alignment"]
