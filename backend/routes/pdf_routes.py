@@ -239,7 +239,10 @@ def generate_certificates():
     data = request.get_json() or {}
     mappings = data.get("mappings", session.get("mappings", {}))
     name_column = data.get("name_column", session.get("name_column"))
-    export_type = data.get("export_type", "both")
+    export_format = data.get("export_format", "pdf")
+
+    if mappings and export_format not in ("pdf", "png", "both"):
+        export_format = "pdf"
 
     if not mappings:
         return jsonify({"status": "error", "message": "No field mappings defined."}), 400
@@ -259,6 +262,7 @@ def generate_certificates():
         session.get("fonts_config", {}),
         name_column=name_column,
         output_dir=output_dir,
+        export_format=export_format,
     )
 
     return jsonify({
@@ -268,8 +272,10 @@ def generate_certificates():
         "total": result["total"],
         "warnings": result["warnings"],
         "failures": result.get("failures", []),
-        "download_zip": f"/api/download/{session_id}/zip",
-        "download_merged": f"/api/download/{session_id}/merged",
+        "export_format": export_format,
+        "download_zip": f"/api/download/{session_id}/zip" if result.get("zip_path") else None,
+        "download_merged": f"/api/download/{session_id}/merged" if result.get("merged_path") else None,
+        "download_png_zip": f"/api/download/{session_id}/png-zip" if result.get("png_zip_path") else None,
     })
 
 
@@ -286,6 +292,9 @@ def generate_certificates_stream():
     data = request.get_json() or {}
     mappings = data.get("mappings", session.get("mappings", {}))
     name_column = data.get("name_column", session.get("name_column"))
+    export_format = data.get("export_format", "pdf")
+    if export_format not in ("pdf", "png", "both"):
+        export_format = "pdf"
 
     if not mappings:
         return jsonify({"status": "error", "message": "No field mappings defined."}), 400
@@ -316,6 +325,7 @@ def generate_certificates_stream():
                 template_path, mappings, rows, field_metadata, fonts_config,
                 name_column=name_column, output_dir=output_dir,
                 progress_callback=progress_callback,
+                export_format=export_format,
             )
             progress_queue.put({
                 "type": "complete",
@@ -323,8 +333,10 @@ def generate_certificates_stream():
                 "total": result["total"],
                 "warnings": result["warnings"],
                 "failures": result.get("failures", []),
-                "download_zip": f"/api/download/{session_id}/zip",
-                "download_merged": f"/api/download/{session_id}/merged",
+                "export_format": export_format,
+                "download_zip": f"/api/download/{session_id}/zip" if result.get("zip_path") else None,
+                "download_merged": f"/api/download/{session_id}/merged" if result.get("merged_path") else None,
+                "download_png_zip": f"/api/download/{session_id}/png-zip" if result.get("png_zip_path") else None,
             })
         except Exception as e:
             progress_queue.put({"type": "error", "message": str(e)})
@@ -357,7 +369,7 @@ def generate_certificates_stream():
 
 @pdf_bp.route("/api/download/<session_id>/<format_type>", methods=["GET"])
 def download_certificates(session_id, format_type):
-    """Download generated certificates as ZIP or merged PDF."""
+    """Download generated certificates as ZIP, merged PDF, or PNG ZIP."""
     output_dir = os.path.join(OUTPUT_DIR, session_id)
 
     if format_type == "zip":
@@ -370,5 +382,10 @@ def download_certificates(session_id, format_type):
         if os.path.exists(merged_path):
             return send_file(merged_path, as_attachment=True,
                              download_name="certificates_merged.pdf")
+    elif format_type == "png-zip":
+        png_zip_path = os.path.join(output_dir, "certificates_png.zip")
+        if os.path.exists(png_zip_path):
+            return send_file(png_zip_path, as_attachment=True,
+                             download_name="certificates_png.zip")
 
     return jsonify({"status": "error", "message": "File not found."}), 404

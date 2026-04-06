@@ -65,21 +65,21 @@ export async function generatePreview(mappings) {
     return r.json();
 }
 
-export async function generateCertificates(mappings, nameColumn) {
+export async function generateCertificates(mappings, nameColumn, exportFormat = 'pdf') {
     const r = await fetch('/api/generate', {
         method: 'POST',
         headers: headers(true),
-        body: JSON.stringify({ mappings, name_column: nameColumn }),
+        body: JSON.stringify({ mappings, name_column: nameColumn, export_format: exportFormat }),
     });
     return r.json();
 }
 
-export function generateCertificatesStream(mappings, nameColumn, onProgress, onComplete, onError) {
+export function generateCertificatesStream(mappings, nameColumn, exportFormat, onProgress, onComplete, onError) {
     // Use fetch + ReadableStream for SSE since EventSource doesn't support POST
     fetch('/api/generate-stream', {
         method: 'POST',
         headers: headers(true),
-        body: JSON.stringify({ mappings, name_column: nameColumn }),
+        body: JSON.stringify({ mappings, name_column: nameColumn, export_format: exportFormat }),
     }).then(async (response) => {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();

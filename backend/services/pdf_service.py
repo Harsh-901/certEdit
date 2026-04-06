@@ -280,8 +280,25 @@ def generate_certificate(template_path, field_data, field_metadata, font_map, ou
         return pdf_bytes
 
 
+def pdf_path_to_pngs(pdf_path, dpi=200):
+    """
+    Render each page of a PDF to a PNG bytes object.
+    Returns a list of (page_index, png_bytes) tuples.
+    """
+    doc = fitz.open(pdf_path)
+    results = []
+    mat = fitz.Matrix(dpi / 72, dpi / 72)  # 72 pt = 1 inch
+    for page_num in range(doc.page_count):
+        page = doc[page_num]
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        results.append((page_num, pix.tobytes("png")))
+    doc.close()
+    return results
+
+
 def generate_bulk(template_path, mappings, all_rows, field_metadata, font_map,
-                  name_column=None, output_dir="output", progress_callback=None):
+                  name_column=None, output_dir="output", progress_callback=None,
+                  export_format="pdf"):
     """
     Generate certificates for all data rows.
 
@@ -294,8 +311,9 @@ def generate_bulk(template_path, mappings, all_rows, field_metadata, font_map,
         name_column: column name to use for filenames
         output_dir: directory for output files
         progress_callback: callable(current, total, current_name) for SSE progress
+        export_format: 'pdf' | 'png' | 'both'
 
-    Returns dict with zip_path, merged_path, count, total, warnings, failures.
+    Returns dict with zip_path, png_zip_path, merged_path, count, total, warnings, failures.
     """
     os.makedirs(output_dir, exist_ok=True)
     individual_dir = os.path.join(output_dir, "individual")
@@ -303,8 +321,12 @@ def generate_bulk(template_path, mappings, all_rows, field_metadata, font_map,
 
     warnings = []
     failures = []
-    generated_files = []
+    generated_files = []   # PDF paths
+    png_files = []         # PNG paths (list of lists, one per PDF)
     name_counts = {}
+
+    want_pdf = export_format in ("pdf", "both")
+    want_png = export_format in ("png", "both")
 
     for row_idx, row_data in enumerate(all_rows):
         # Build field_data for this row
@@ -317,7 +339,7 @@ def generate_bulk(template_path, mappings, all_rows, field_metadata, font_map,
                 )
             field_data[field_id] = value
 
-        # Determine filename
+        # Determine filename (base without extension)
         current_name = ""
         if name_column and name_column in row_data:
             current_name = str(row_data[name_column]).strip()
@@ -332,38 +354,71 @@ def generate_bulk(template_path, mappings, all_rows, field_metadata, font_map,
         # Handle duplicates
         if base_name in name_counts:
             name_counts[base_name] += 1
-            filename = f"{base_name}_{name_counts[base_name]}.pdf"
+            unique_base = f"{base_name}_{name_counts[base_name]}"
         else:
             name_counts[base_name] = 1
-            filename = f"{base_name}.pdf"
+            unique_base = base_name
 
-        filepath = os.path.join(individual_dir, filename)
+        pdf_filename = f"{unique_base}.pdf"
+        filepath = os.path.join(individual_dir, pdf_filename)
 
         # Report progress
         if progress_callback:
             progress_callback(row_idx + 1, len(all_rows), current_name or base_name)
 
-        # Generate
+        # Generate PDF (always needed as intermediate, even for png-only)
         try:
             generate_certificate(
                 template_path, field_data, field_metadata, font_map,
                 output_path=filepath
             )
-            generated_files.append(filepath)
         except Exception as e:
             failures.append(f"Row {row_idx + 1} ({current_name or base_name}): {str(e)}")
             continue
 
-    # Create ZIP
-    import zipfile
-    zip_path = os.path.join(output_dir, "certificates.zip")
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for fp in generated_files:
-            zf.write(fp, os.path.basename(fp))
+        generated_files.append(filepath)
 
-    # Create merged PDF
+        # Render PNGs from the just-saved PDF
+        if want_png:
+            try:
+                pages = pdf_path_to_pngs(filepath)
+                row_pngs = []
+                for page_idx, png_bytes in pages:
+                    suffix = f"_p{page_idx + 1}" if len(pages) > 1 else ""
+                    png_filename = f"{unique_base}{suffix}.png"
+                    png_path = os.path.join(individual_dir, png_filename)
+                    with open(png_path, "wb") as pf:
+                        pf.write(png_bytes)
+                    row_pngs.append(png_path)
+                png_files.extend(row_pngs)
+            except Exception as e:
+                warnings.append(
+                    f"Row {row_idx + 1}: PNG render failed — {str(e)}"
+                )
+
+    import zipfile
+
+    # ── PDF ZIP (individual PDFs) ──
+    zip_path = os.path.join(output_dir, "certificates.zip")
+    if want_pdf and generated_files:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for fp in generated_files:
+                zf.write(fp, os.path.basename(fp))
+    else:
+        zip_path = None
+
+    # ── PNG ZIP ──
+    png_zip_path = os.path.join(output_dir, "certificates_png.zip")
+    if want_png and png_files:
+        with zipfile.ZipFile(png_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for fp in png_files:
+                zf.write(fp, os.path.basename(fp))
+    else:
+        png_zip_path = None
+
+    # ── Merged PDF ──
     merged_path = os.path.join(output_dir, "certificates_merged.pdf")
-    if generated_files:
+    if want_pdf and generated_files:
         merged_doc = fitz.open()
         for fp in generated_files:
             cert_doc = fitz.open(fp)
@@ -371,9 +426,12 @@ def generate_bulk(template_path, mappings, all_rows, field_metadata, font_map,
             cert_doc.close()
         merged_doc.save(merged_path)
         merged_doc.close()
+    else:
+        merged_path = None
 
     return {
         "zip_path": zip_path,
+        "png_zip_path": png_zip_path,
         "merged_path": merged_path,
         "count": len(generated_files),
         "total": len(all_rows),

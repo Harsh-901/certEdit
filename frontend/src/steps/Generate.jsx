@@ -5,10 +5,32 @@ import {
     getDownloadUrl,
 } from '../api';
 
+const FORMAT_OPTIONS = [
+    {
+        value: 'pdf',
+        label: 'PDF',
+        icon: '📄',
+        desc: 'Editable, vector PDF files',
+    },
+    {
+        value: 'png',
+        label: 'PNG',
+        icon: '🖼️',
+        desc: 'High-res image files (200 DPI)',
+    },
+    {
+        value: 'both',
+        label: 'Both',
+        icon: '📦',
+        desc: 'PDF + PNG in separate ZIPs',
+    },
+];
+
 export default function Generate({ mappings, nameColumn, totalRows, onBack, addToast }) {
     const [status, setStatus] = useState('idle'); // idle | generating | done | error
     const [progress, setProgress] = useState({ current: 0, total: 0, name: '' });
     const [result, setResult] = useState(null);
+    const [exportFormat, setExportFormat] = useState('pdf');
 
     const handleGenerate = useCallback(() => {
         if (Object.keys(mappings).length === 0) {
@@ -22,6 +44,7 @@ export default function Generate({ mappings, nameColumn, totalRows, onBack, addT
         generateCertificatesStream(
             mappings,
             nameColumn,
+            exportFormat,
             // onProgress
             (msg) => {
                 setProgress({
@@ -41,7 +64,7 @@ export default function Generate({ mappings, nameColumn, totalRows, onBack, addT
                 setStatus('error');
                 addToast(errMsg || 'Generation failed.', 'error');
                 // Fallback to sync generation
-                generateCertificates(mappings, nameColumn).then((data) => {
+                generateCertificates(mappings, nameColumn, exportFormat).then((data) => {
                     if (data.status === 'success') {
                         setStatus('done');
                         setResult(data);
@@ -50,7 +73,7 @@ export default function Generate({ mappings, nameColumn, totalRows, onBack, addT
                 });
             },
         );
-    }, [mappings, nameColumn, totalRows, addToast]);
+    }, [mappings, nameColumn, totalRows, exportFormat, addToast]);
 
     const pct = progress.total > 0
         ? Math.round((progress.current / progress.total) * 100)
@@ -66,9 +89,70 @@ export default function Generate({ mappings, nameColumn, totalRows, onBack, addT
                 {status === 'error' && 'An error occurred. Retrying…'}
             </p>
 
+            {/* Export format selector */}
+            {status === 'idle' && (
+                <div style={{ marginBottom: 28 }}>
+                    <p style={{
+                        fontSize: 13,
+                        fontWeight: 600,
+                        color: 'var(--text-secondary)',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.08em',
+                        marginBottom: 12,
+                    }}>
+                        Export Format
+                    </p>
+                    <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(3, 1fr)',
+                        gap: 10,
+                    }}>
+                        {FORMAT_OPTIONS.map((opt) => (
+                            <button
+                                key={opt.value}
+                                onClick={() => setExportFormat(opt.value)}
+                                style={{
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'center',
+                                    gap: 6,
+                                    padding: '14px 10px',
+                                    borderRadius: 'var(--radius-sm)',
+                                    border: exportFormat === opt.value
+                                        ? '2px solid var(--accent)'
+                                        : '2px solid var(--border)',
+                                    background: exportFormat === opt.value
+                                        ? 'rgba(99,102,241,0.12)'
+                                        : 'var(--surface)',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.18s ease',
+                                    color: exportFormat === opt.value
+                                        ? 'var(--accent)'
+                                        : 'var(--text-secondary)',
+                                }}
+                            >
+                                <span style={{ fontSize: 22 }}>{opt.icon}</span>
+                                <span style={{
+                                    fontWeight: 700,
+                                    fontSize: 13,
+                                    color: exportFormat === opt.value
+                                        ? 'var(--accent)'
+                                        : 'var(--text-primary)',
+                                }}>
+                                    {opt.label}
+                                </span>
+                                <span style={{ fontSize: 11, textAlign: 'center', lineHeight: 1.3 }}>
+                                    {opt.desc}
+                                </span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             {/* Generate button */}
             {status === 'idle' && (
-                <div style={{ textAlign: 'center', padding: '32px 0' }}>
+                <div style={{ textAlign: 'center', padding: '8px 0 32px' }}>
                     <div style={{
                         fontSize: 48,
                         marginBottom: 16,
@@ -151,29 +235,56 @@ export default function Generate({ mappings, nameColumn, totalRows, onBack, addT
                     )}
 
                     <div className="download-options">
-                        <a
-                            href={getDownloadUrl('zip')}
-                            className="download-card"
-                            download
-                        >
-                            <div className="download-icon">📦</div>
-                            <div className="download-label">Download ZIP</div>
-                            <div className="download-desc">
-                                {result.count} individual PDF files
-                            </div>
-                        </a>
+                        {/* PDF ZIP */}
+                        {result.download_zip && (
+                            <a
+                                href={result.download_zip}
+                                className="download-card"
+                                download
+                            >
+                                <div className="download-icon">📦</div>
+                                <div className="download-label">Download ZIP</div>
+                                <div className="download-desc">
+                                    {result.count} individual PDF files
+                                </div>
+                            </a>
+                        )}
 
-                        <a
-                            href={getDownloadUrl('merged')}
-                            className="download-card"
-                            download
-                        >
-                            <div className="download-icon">📑</div>
-                            <div className="download-label">Download Merged PDF</div>
-                            <div className="download-desc">
-                                All certificates in one file
-                            </div>
-                        </a>
+                        {/* Merged PDF */}
+                        {result.download_merged && (
+                            <a
+                                href={result.download_merged}
+                                className="download-card"
+                                download
+                            >
+                                <div className="download-icon">📑</div>
+                                <div className="download-label">Download Merged PDF</div>
+                                <div className="download-desc">
+                                    All certificates in one file
+                                </div>
+                            </a>
+                        )}
+
+                        {/* PNG ZIP */}
+                        {result.download_png_zip && (
+                            <a
+                                href={result.download_png_zip}
+                                className="download-card"
+                                download
+                                style={{
+                                    borderColor: 'rgba(16,185,129,0.4)',
+                                    background: 'rgba(16,185,129,0.07)',
+                                }}
+                            >
+                                <div className="download-icon">🖼️</div>
+                                <div className="download-label" style={{ color: '#34d399' }}>
+                                    Download PNGs
+                                </div>
+                                <div className="download-desc">
+                                    {result.count} high-res PNG images
+                                </div>
+                            </a>
+                        )}
                     </div>
                 </>
             )}
